@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/johannesboyne/golib/memfile"
 )
 
 // Writer is the type that is used to write a new shapefile.
@@ -25,12 +27,33 @@ type Writer struct {
 	dbfFields       []Field
 	dbfHeaderLength int16
 	dbfRecordLength int16
+
+	inMemory bool
 }
 
 type writeSeekCloser interface {
 	io.Writer
 	io.Seeker
 	io.Closer
+}
+
+func CreateInMemory(filename string, t ShapeType) (*Writer, error) {
+	var shpBuffer []byte
+	var shxBuffer []byte
+	shpF := memfile.New(shpBuffer)
+	shxF := memfile.New(shxBuffer)
+	shpF.Seek(100, io.SeekStart)
+	shxF.Seek(100, io.SeekStart)
+
+	w := &Writer{
+		filename:     filename,
+		shp:          shpF,
+		shx:          shxF,
+		GeometryType: t,
+		inMemory:     true,
+	}
+
+	return w, nil
 }
 
 // Create returns a point to new Writer and the first error that was
@@ -222,6 +245,14 @@ func (w *Writer) Close() {
 	w.dbf.Close()
 }
 
+func (w *Writer) GetInMemoryFiles() [][]byte {
+	return [][]byte{
+		w.shp.(*memfile.File).Bytes(),
+		w.shx.(*memfile.File).Bytes(),
+		w.dbf.(*memfile.File).Bytes(),
+	}
+}
+
 // writeHeader wrires SHP/SHX headers to ws.
 func (w *Writer) writeHeader(ws io.WriteSeeker) {
 	filelength, _ := ws.Seek(0, io.SeekEnd)
@@ -269,7 +300,12 @@ func (w *Writer) SetFields(fields []Field) error {
 	}
 
 	var err error
-	w.dbf, err = os.Create(w.filename + ".dbf")
+	if w.inMemory {
+		var dbfBuffer []byte
+		w.dbf = memfile.New(dbfBuffer)
+	} else {
+		w.dbf, err = os.Create(w.filename + ".dbf")
+	}
 	if err != nil {
 		return fmt.Errorf("Failed to open %s.dbf: %v", w.filename, err)
 	}
